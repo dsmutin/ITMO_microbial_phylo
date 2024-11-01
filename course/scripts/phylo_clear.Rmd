@@ -1,0 +1,411 @@
+---
+title: "phylo"
+author: "D.Smutin"
+date: "2024-10-31"
+output: 'pdf_document'
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggtree)
+library(ape)
+library(vegan)
+library(ggpubr)
+#devtools::install_github("ndukler/phyloGLM")
+library(phyloGLM)
+library(phylolm)
+library(future)
+future.seed=TRUE
+plan(multicore)
+options(future.rng.onMisuse = "ignore")
+
+mms <- function(x) (x - min(x, na.rm = T)) / 
+    (max(x, na.rm = T)-min(x, na.rm = T))
+```
+
+# Just tree
+## Read tree
+```{r}
+leg <- readxl::read_xlsx("../data/legends/TE_101_annot.xlsx") %>% 
+  rename("label"="SP") %>% 
+  mutate(repeats = apply(.[,-c(1:4)], 1, sum))
+colnames(leg) <- colnames(leg) %>% str_remove_all("[?:]")
+
+# Read files, combine with legend and drop tips which are not represented
+rb <- function(path) {
+  tmp <- (read.nexus(path) %>% ggtree)$data %>% 
+    mutate(label = label %>% 
+             str_replace("_", " ") %>% 
+             str_remove("_.*")) %>% 
+    left_join(leg, by = "label")
+}
+
+rn <- function(path) {
+  tmp <- (read.tree(path) %>% ggtree)$data %>% 
+    mutate(label = label %>% 
+             str_replace("_", " ") %>% 
+             str_remove("_.*")) %>% 
+    left_join(leg, by = "label")
+}
+
+rt <- function(path) {
+  tmp <- (read.nexus(path) %>% ggtree(
+    #branch.length = 'none'
+    ))$data %>% 
+    mutate(label = label %>% 
+             str_replace("_", " ") %>% 
+             str_remove("_.*")) %>% 
+    left_join(leg, by = "label")
+}
+
+d1 <- rb("../data/tree/beast/hymen16s.out.nex")
+d2 <- rb("../data/tree/beast/hymenCOX.out.nex")
+d3 <- rn("../data/tree/nj/hymen16s.nwk")
+d4 <- rn("../data/tree/nj/hymenCOXI.nwk")
+
+d5 <- rt("../data/tree/new/mrbayes.tre")
+d6 <- rn("../data/tree/new/tree.nwk")
+```
+
+## Compare phylo
+```{r}
+ggcompare <- function(d1, d2) {
+  # main code from https://yulab-smu.top/treedata-book/chapter2.html
+  d1$x <- mms(d1$x)
+  d2$x <- mms(d2$x)
+
+  ## reverse x-axis and
+  d2$x <- max(d2$x) - d2$x + max(d1$x) + .5
+
+  pp <- ggtree(d1, aes(color = as.numeric(label))) +
+    geom_tree(data = d2, aes(color = as.numeric(label), x = x + .2)) +
+    theme(legend.position = "bottom") +
+    scale_color_gradient(name = "confidence", low = "lightgreen", high = "darkgreen", na.value = "darkgreen")
+
+
+    dd <- bind_rows(
+      d1[d1$label %in% d2$label, ],
+      d2[d2$label %in% d1$label, ]
+    ) %>%
+      filter(!is.na(label)) %>% 
+      subset(isTip)
+
+    gg <- pp +
+      ggnewscale::new_scale_color() +
+      geom_line(
+        aes(x, y,
+          group = label,
+          color = Family
+        ),
+        data = dd, alpha = .1
+      ) +
+      #scale_color_brewer("", palette = "Set2", na.value = "gray") +
+      geom_tiplab(data = d2, hjust = 0, aes(x = x, color = Family), size = 2) 
+    print(gg)
+    gg
+}
+
+ggcompare(
+  d2,d1
+)
+ggcompare(
+  d3,d4
+)
+ggcompare(
+  d2,d4
+)
+ggcompare(
+  d5,d6
+)
+```
+
+## Eusociality
+```{r}
+gg <- ggtree(d6, aes(color = as.numeric(label)), 
+            # layout = "circular"
+             ) +
+  ggnewscale::new_scale_color() +
+  geom_tippoint(aes(color = Social)) +
+  ggnewscale::new_scale_color() +
+  geom_tiplab(size = 2,align=TRUE, aes(color = Family), show.legend = F) +
+  ggnewscale::new_scale_color() +
+  theme_tree2() 
+
+gg
+```
+
+# Add data
+## Heatmap
+```{r}
+hmp <- (leg %>% column_to_rownames("label"))[,-c(1:4, 23)] %>% 
+  na.omit %>% 
+  apply(2, mms)
+
+gg2 <- gheatmap(gg, hmp, offset=.2, width=1, 
+        colnames=F, legend_title="amount") +
+  scale_fill_gradient("% of elements",
+                      low = "lightgreen", high="tomato",
+                      na.value = "transparent") +
+    scale_x_ggtree() + 
+    scale_y_continuous(expand=c(0, 1)) +
+  theme(axis.text.x = element_text(angle = 30, hjust= 1, size = 5),
+        legend.position = "bottom")
+
+gg2
+```
+
+## Hmp circ
+```{r}
+gg <- ggtree(d6, layout = "circular",
+            branch.length = "none"
+             ) +
+  ggnewscale::new_scale_color() +
+  geom_tippoint(aes(color = Social)) +
+  ggnewscale::new_scale_color() +
+  geom_tiplab(data = d6, size = 2,align=TRUE, aes(color = Family, label = ""), show.legend = F) +
+  ggnewscale::new_scale_color() 
+
+
+gg2 <- gheatmap(gg, hmp, offset=.2, width=1, 
+        colnames=F, legend_title="amount") +
+  scale_fill_gradient("% of elements",
+                      low = "lightgreen", high="tomato",
+                      na.value = "transparent") +
+    scale_y_continuous(expand=c(0, .1)) +
+  theme_tree() +
+  theme(axis.text = element_text())
+
+gg2
+```
+
+## Permanova
+### Cophenetic
+```{r}
+hmp <- (leg %>% column_to_rownames("label"))[,-c(1:4, 23)] %>% 
+  na.omit
+colnames(hmp) <- colnames(hmp) %>% 
+  str_replace_all("[/ -]", "_")
+
+coph <- cophenetic.phylo(d6 %>% as.phylo) %>% 
+  as.data.frame() %>% 
+  subset(rownames(.) %in% rownames(hmp)) %>% t %>% 
+  subset(rownames(.) %in% rownames(hmp)) %>% 
+  as.data.frame()
+
+hmp <- hmp %>% 
+  subset(rownames(.) %in% rownames(coph)) %>% 
+  as.data.frame()
+
+#colnames(hmp) %>% paste0(collapse = " + ") %>%  cat
+
+hmp3 <- hmp %>% apply(2, mms) %>% as.data.frame()
+for ( i in colnames(hmp) ) {
+  adform <- as.formula(paste0("coph ~ ", i))
+  adres <- adonis2(adform,data = hmp3)
+  pv1 = adres$`Pr(>F)`[1]
+  pv2 = rep("*", -log10(adres$`Pr(>F)`[1]) %>% round)[-1] %>% 
+    paste0(collapse = "")
+  
+  cat(i,
+      "\nR2:", adres$R2[1] %>% round(2), 
+      "\np:",adres$`Pr(>F)`[1] %>% round(3), pv2) 
+  cat("\n####\n\n")
+}
+```
+
+### Eusoc
+```{r}
+socvec <- leg[match(rownames(hmp3),leg$label),"Social"] %>% 
+  mutate(Social = ifelse(
+    Social %in% c("YES", "NO"),
+    Social,
+    "PART"
+  ))
+
+res <- adonis2(hmp3~Social,
+               data = socvec, 
+               #method = "euclidian",
+               by = "onedf")
+
+res
+```
+
+## Barplots
+```{r}
+hmp2 <- hmp %>% 
+  rownames_to_column("sp") %>% 
+  mutate(Social = socvec$Social) %>% 
+  pivot_longer(cols = -c(1, 20)) 
+  
+gg <- hmp2 %>%
+  mutate(name = fct_inorder(name)) %>%
+  mutate(Social = fct_rev(Social)) %>% 
+  ggplot(aes(color = Social, y = "", x = value)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = "free", nrow = 3) +
+  theme_minimal() +
+  scale_color_manual(values = c("#00AFBB", "#E7B800", "#FC4E07")) +
+  xlab("") + ylab("") +
+  theme(legend.position = "bottom",
+        strip.clip = "none")
+
+gg
+```
+
+
+```{r}
+cmp <- list(c("YES", "NO"), c("YES", "PART"), c("NO", "PART"))
+
+for (i in unique(hmp2$name)) {
+  ggp <- hmp2 %>%
+    mutate(Social = fct_rev(Social)) %>%
+    subset(name == i) %>%
+    ggboxplot(
+      x = "Social", y = "value",
+      color = "Social",
+      palette = c("#00AFBB", "#E7B800", "#FC4E07"),
+      add = "jitter", shape = "name"
+    ) +
+    # facet_wrap(~name, scales = "free") +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      # axis.text.x = element_blank()
+    ) +
+    stat_compare_means(comparisons = cmp, label = "p.signif") +
+    ggtitle(i) +
+    xlab("sociality")
+
+  print(ggp)
+
+  # ggsave(paste0("pubr/",i,".png"), ggp, width = 1000, height = 1000, units = "px")
+}
+```
+## Correllations
+```{r}
+hcor <- hmp3 %>% cor
+hp <- corrplot::cor.mtest(hmp3)
+corrplot::corrplot(hmp3 %>% cor, 
+                   p.mat = hp$p,
+                   insig = 'label_sig',
+                   sig.level = c(0.001, 0.01, 0.05), 
+                   pch.cex = 0.3,
+                   is.corr = T,
+                   tl.col = "black",
+                   method = 'circle',
+                   order = "FPC",
+                   #col = c('white', 'black'), bg = 'gold2'
+                   )
+```
+
+
+
+## NMDS
+### Coph as distance
+```{r}
+MMDS <- metaMDS(comm = hmp3, 
+        dist = coph,
+        distfun = function(x) vegdist(x,method = "bray"))
+
+#goodness(MMDS)
+stressplot(MMDS)
+```
+
+```{r}
+envfit(MMDS, socvec)
+```
+
+### Coph as matrix
+```{r}
+MMDS <- metaMDS(comm = coph,
+        distfun = function(x) vegdist(x,method = "bray"))
+
+#goodness(MMDS)
+stressplot(MMDS)
+```
+```{r}
+envfit(MMDS, hmp %>% cbind(socvec))
+```
+
+## Phylogenetic GLM
+### phylolm test
+```{r, eval = F}
+hmp4 <- hmp3 %>% 
+  mutate(social = socvec %>% 
+           unlist) %>% 
+  mutate(socbin = !(social == "NO"))
+
+phy <- d6 %>% 
+  as.phylo() %>% 
+  drop.tip(tip = .$tip.label[!(.$tip.label %in% rownames(hmp4))])
+
+signinf <- c()
+
+for ( i in colnames(hmp3) ) {
+  lmform <- as.formula(paste0("socbin ~ ", i))
+  fit <- try(suppressWarnings(phylolm::phyloglm(lmform,
+                    phy = phy,
+                    method = "logistic_IG10",
+                    data = hmp4,
+                    boot = 100) ),
+    silent = T)
+  
+  sfit <- summary(fit)
+  
+  rv = fit$coefficients[2]
+  pv1 = sfit$coefficients[,"p.value"][2]
+  
+  if(pv1 < 0.1) signif <- c( signif, as.character(i) ) 
+  
+  pv2 = rep("*", -log10(pv1) %>% round) %>% 
+    paste0(collapse = "")
+  
+  cat("\n",i,
+      "\ncoef: ", rv %>% round(2), 
+      "\np: ", pv1 %>% round(3), pv2,
+      "\n##########\n", sep = "")
+}
+
+#cat ("\nSignificant for further testing:", signif, sep = "\n- ")
+```
+
+# not done yet
+## phyloglm viz
+```{r, eval = F}
+hmp_list <- list()
+for (i in 1:nrow(hmp4)){
+  tmp <- hmp4[i,]
+}
+ 
+
+ad <- alleleData(data = hmp4, tree = phy)
+
+nullFormula <- formula(~ socbin)
+nullMod <- rateModel(data = ad, 
+                     rateFormula = lmform, 
+                     rateBounds = rBounds)
+
+for (i in signif) {
+  lmform <- as.formula(paste0("~ socbin + ", i, " + 0"))
+  rBounds <- c(10^-2, 10)
+  rateMod <- rateModel(data = ad, 
+                       rateFormula = lmform, 
+                       rateBounds = rBounds)
+  
+  glmfit <- phyloGLM::fit(
+    threads = 10,
+    method = "bfgs", 
+    hessian = TRUE
+  )
+  
+  plotElementTransitions(rateMod)
+}
+
+```
+
+
+
+
+
